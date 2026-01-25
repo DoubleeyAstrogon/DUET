@@ -91,7 +91,7 @@ class PigGameView(discord.ui.View):
             INSERT INTO user_stats (user_id, pig_score)
             VALUES (%s, %s)
             ON DUPLICATE KEY UPDATE
-            pig_score = pig_score + VALUES(pig_score)
+            pig_score = GREATEST(pig_score, VALUES(pig_score))
         """, (self.user_id, self.score))
 
         db.commit()
