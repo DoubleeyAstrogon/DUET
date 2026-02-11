@@ -152,8 +152,7 @@ async def on_ready():
 ######################
 #######COMMANDS#######
 ######################
-
-
+# troller
 # Pig Game command
 @bot.tree.command(name="pig", description="Play Pig dice game")
 async def pig(interaction: discord.Interaction):
