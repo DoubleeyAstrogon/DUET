@@ -1,6 +1,6 @@
 import discord
 import random
-from discord import app_commands
+from discord import Permissions, app_commands
 from discord.ext import commands
 import logging
 from dotenv import load_dotenv
@@ -44,8 +44,15 @@ intents.message_content = True
 
 bot = commands.Bot(command_prefix='?', intents=intents)
 
+def ensure_user(user_id: int):
+    cursor.execute("""
+        INSERT IGNORE INTO users (user_id)
+        VALUES (%s)
+    """, (user_id,))
+    db.commit()
+
 #####################
-########VIEW#########
+#########VIEW########
 #####################
 
 class PigGameView(discord.ui.View):
@@ -146,6 +153,8 @@ async def on_ready():
 #######COMMANDS#######
 ######################
 
+
+# Pig Game command
 @bot.tree.command(name="pig", description="Play Pig dice game")
 async def pig(interaction: discord.Interaction):
     user_id = interaction.user.id
@@ -159,5 +168,97 @@ async def pig(interaction: discord.Interaction):
         view=view
     )
 
-#RUN THAT BITCH LOL
+# /balance command
+@bot.tree.command(name="balance", description="Check your balance", guild=guild)
+@app_commands.describe(
+    user="the user you want to check the balance of"
+)
+async def balance(
+    interaction: discord.Interaction,
+    user: discord.Member = None
+):
+    target_user = user or interaction.user
+    user_id = target_user.id
+    ensure_user(user_id)
+
+    cursor.execute(
+        "SELECT balance FROM users WHERE user_id = %s",
+        (user_id,)
+    )
+    balance = cursor.fetchone()[0]
+
+    await interaction.response.send_message(
+        f"💰 {target_user.display_name}'s balance: **{balance} coins**"
+    )
+
+# admin command for adding money, if subsract option is set to True then the amount set will be subsracted instead, fallback to false if not set (adding money)
+@bot.tree.command(name="admin-economy", description="(ADMIN) money config", guild=guild)
+@app_commands.describe(
+    user="user",
+    amount="money",
+    subtract="boolean"
+)
+#check for perms
+@app_commands.checks.has_permissions(administrator=True) 
+async def money(
+    interaction: discord.Interaction,
+    user: discord.Member,
+    amount: int,
+    subtract: bool = False
+):
+    if amount <= 0:
+        await interaction.response.send_message(
+            "Amount must be greater than 0.",
+            ephemeral=True
+        )
+        return
+    
+    ensure_user(user.id)
+
+    if subtract:
+        # Prevent negative balance
+        cursor.execute(
+            "SELECT balance FROM users WHERE user_id = %s",
+            (user.id,)
+        )
+        current_balance = cursor.fetchone()[0]
+
+        if current_balance < amount:
+            await interaction.response.send_message(
+                f"**{user.display_name}** does not have enough balance.",
+                ephemeral=True
+            )
+            return
+
+        cursor.execute(
+            "UPDATE users SET balance = balance - %s WHERE user_id = %s",
+            (amount, user.id)
+        )
+
+        action = "removed from"
+
+    else:
+        cursor.execute(
+            "UPDATE users SET balance = balance + %s WHERE user_id = %s",
+            (amount, user.id)
+        )
+
+        action = "added to"
+
+    db.commit()
+
+    await interaction.response.send_message(
+        f"✅ {amount} coins {action} {user.display_name}'s balance."
+    )
+
+#if error on money which is the command def
+@money.error
+async def money_error(interaction: discord.Interaction, error):
+    if isinstance(error, app_commands.errors.MissingPermissions):
+        await interaction.response.send_message(
+            "You don't have permission to use this command.",
+            ephemeral=True
+        )
+
+#RUN
 bot.run(token, log_handler=handler, log_level=logging.DEBUG)
