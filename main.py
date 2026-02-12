@@ -17,15 +17,18 @@ db_pass = os.getenv("DB_PASS")
 db_name = os.getenv("DB_NAME")
 
 #database connect
-db = mysql.connector.connect(
-    host=db_host,
-    user=db_user,
-    password=db_pass,
-    database=db_name
-)
+try:
+    db = mysql.connector.connect(
+        host=db_host,
+        user=db_user,
+        password=db_pass,
+        database=db_name,
+        buffered=True
+    )
+except mysql.connector.Error as e:
+    print(f"Database connection error: {e}")
+    exit()
 
-#run db
-cursor = db.cursor()
 
 #get token from env
 token = os.getenv("TOKEN")
@@ -45,10 +48,11 @@ intents.message_content = True
 bot = commands.Bot(command_prefix='?', intents=intents)
 
 def ensure_user(user_id: int):
-    cursor.execute("""
-        INSERT IGNORE INTO users (user_id)
-        VALUES (%s)
-    """, (user_id,))
+    with db.cursor() as cursor:
+        cursor.execute("""
+            INSERT IGNORE INTO users (user_id)
+            VALUES (%s)
+        """, (user_id,))
     db.commit()
 
 #####################
@@ -94,13 +98,13 @@ class PigGameView(discord.ui.View):
 
     @discord.ui.button(label="🏁 End Game", style=discord.ButtonStyle.success)
     async def end_game(self, interaction: discord.Interaction, button: discord.ui.Button):
-        cursor.execute("""
-            INSERT INTO user_stats (user_id, pig_score)
-            VALUES (%s, %s)
-            ON DUPLICATE KEY UPDATE
-            pig_score = GREATEST(pig_score, VALUES(pig_score))
-        """, (self.user_id, self.score))
-
+        with db.cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO user_stats (user_id, pig_score)
+                VALUES (%s, %s)
+                ON DUPLICATE KEY UPDATE
+                pig_score = GREATEST(pig_score, VALUES(pig_score))
+            """, (self.user_id, self.score))
         db.commit()
 
         self.clear_items()
@@ -111,7 +115,9 @@ class PigGameView(discord.ui.View):
         )
 
     async def on_timeout(self):
-        self.clear_items()
+        for item in self.children:
+            item.disabled = True
+            
 
 class PlayAgainButton(discord.ui.Button):
     def __init__(self, user_id: int):
@@ -158,9 +164,13 @@ async def on_ready():
 @bot.tree.command(name="pig", description="Play Pig dice game")
 async def pig(interaction: discord.Interaction):
     user_id = interaction.user.id
-    cursor.execute("SELECT pig_score FROM user_stats WHERE user_id = %s", (user_id,))
+    with db.cursor() as cursor:
+        cursor.execute(
+            "SELECT pig_score FROM user_stats WHERE user_id = %s",
+            (user_id,)
+        )
     result = cursor.fetchone()
-    highscore = result[0] if result else 0;
+    highscore = result[0] if result else 0
     view = PigGameView(interaction.user.id)
     await interaction.response.send_message(
         f"🐷 Pig Game started!\nRoll the dice!\nHighscore: **{highscore}**",
@@ -181,10 +191,11 @@ async def balance(
     user_id = target_user.id
     ensure_user(user_id)
 
-    cursor.execute(
-        "SELECT balance FROM users WHERE user_id = %s",
-        (user_id,)
-    )
+    with db.cursor() as cursor:
+        cursor.execute(
+            "SELECT balance FROM users WHERE user_id = %s",
+            (user_id,)
+        )
     balance = cursor.fetchone()[0]
 
     await interaction.response.send_message(
@@ -215,35 +226,32 @@ async def money(
     
     ensure_user(user.id)
 
-    if subtract:
-        # Prevent negative balance
-        cursor.execute(
-            "SELECT balance FROM users WHERE user_id = %s",
-            (user.id,)
-        )
-        current_balance = cursor.fetchone()[0]
-
-        if current_balance < amount:
-            await interaction.response.send_message(
-                f"**{user.display_name}** does not have enough balance.",
-                ephemeral=True
+    with db.cursor() as cursor:
+        if subtract:
+            cursor.execute(
+                "SELECT balance FROM users WHERE user_id = %s",
+                (user.id,)
             )
-            return
+            current_balance = cursor.fetchone()[0]
 
-        cursor.execute(
-            "UPDATE users SET balance = balance - %s WHERE user_id = %s",
-            (amount, user.id)
-        )
+            if current_balance < amount:
+                await interaction.response.send_message(
+                    f"**{user.display_name}** does not have enough balance.",
+                    ephemeral=True
+                )
+                return
 
-        action = "removed from"
-
-    else:
-        cursor.execute(
-            "UPDATE users SET balance = balance + %s WHERE user_id = %s",
-            (amount, user.id)
-        )
-
-        action = "added to"
+            cursor.execute(
+                "UPDATE users SET balance = balance - %s WHERE user_id = %s",
+                (amount, user.id)
+            )
+            action = "removed from"
+        else:
+            cursor.execute(
+                "UPDATE users SET balance = balance + %s WHERE user_id = %s",
+                (amount, user.id)
+            )
+            action = "added to"
 
     db.commit()
 
